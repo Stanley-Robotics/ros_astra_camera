@@ -129,6 +129,8 @@ public:
 
     const AstraDeviceInfo device_info_wrapped = astra_convert(pInfo);
     device_set_.erase(device_info_wrapped);
+    // shutdown ros to be able to re-use astra at after reconnect
+    ros::shutdown();
   }
 
   boost::shared_ptr<std::vector<std::string> > getConnectedDeviceURIs()
