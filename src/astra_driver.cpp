@@ -75,11 +75,13 @@ AstraDriver::AstraDriver(ros::NodeHandle& n, ros::NodeHandle& pnh) :
 
   advertiseROSTopics();
 
+  reconnect_timer_ = nh_.createTimer(ros::Duration(0.2), &AstraDriver::reconnectCallback, this);
+
 }
 
-void AstraDriver::advertiseROSTopics()
-{
 
+void AstraDriver::advertiseROSTopics(bool infoCamera)
+{
   // Allow remapping namespaces rgb, ir, depth, depth_registered
   ros::NodeHandle color_nh(nh_, "rgb");
   image_transport::ImageTransport color_it(color_nh);
@@ -120,28 +122,31 @@ void AstraDriver::advertiseROSTopics()
     pub_depth_ = depth_raw_it.advertiseCamera("image", 1, itssc, itssc, rssc, rssc);
   }
 
-  ////////// CAMERA INFO MANAGER
+  if(infoCamera){
 
-  // Pixel offset between depth and IR images.
-  // By default assume offset of (5,4) from 9x7 correlation window.
-  // NOTE: These are now (temporarily?) dynamically reconfigurable, to allow tweaking.
-  //param_nh.param("depth_ir_offset_x", depth_ir_offset_x_, 5.0);
-  //param_nh.param("depth_ir_offset_y", depth_ir_offset_y_, 4.0);
+      ////////// CAMERA INFO MANAGER
 
-  // The camera names are set to [rgb|depth]_[serial#], e.g. depth_B00367707227042B.
-  // camera_info_manager substitutes this for ${NAME} in the URL.
-  std::string serial_number = device_->getStringID();
-  std::string color_name, ir_name;
+      // Pixel offset between depth and IR images.
+      // By default assume offset of (5,4) from 9x7 correlation window.
+      // NOTE: These are now (temporarily?) dynamically reconfigurable, to allow tweaking.
+      //param_nh.param("depth_ir_offset_x", depth_ir_offset_x_, 5.0);
+      //param_nh.param("depth_ir_offset_y", depth_ir_offset_y_, 4.0);
 
-  color_name = "rgb_"   + serial_number;
-  ir_name  = "depth_" + serial_number;
+      // The camera names are set to [rgb|depth]_[serial#], e.g. depth_B00367707227042B.
+      // camera_info_manager substitutes this for ${NAME} in the URL.
+      std::string serial_number = device_->getStringID();
+      std::string color_name, ir_name;
 
-  // Load the saved calibrations, if they exist
-  color_info_manager_ = boost::make_shared<camera_info_manager::CameraInfoManager>(color_nh, color_name, color_info_url_);
-  ir_info_manager_  = boost::make_shared<camera_info_manager::CameraInfoManager>(ir_nh,  ir_name,  ir_info_url_);
+      color_name = "rgb_"   + serial_number;
+      ir_name  = "depth_" + serial_number;
 
-  get_serial_server = nh_.advertiseService("get_serial", &AstraDriver::getSerialCb,this);
+      // Load the saved calibrations, if they exist
+      color_info_manager_ = boost::make_shared<camera_info_manager::CameraInfoManager>(color_nh, color_name, color_info_url_);
+      ir_info_manager_  = boost::make_shared<camera_info_manager::CameraInfoManager>(ir_nh,  ir_name,  ir_info_url_);
 
+      get_serial_server = nh_.advertiseService("get_serial", &AstraDriver::getSerialCb,this);
+
+  }
 }
 
 bool AstraDriver::getSerialCb(astra_camera::GetSerialRequest& req, astra_camera::GetSerialResponse& res) {
@@ -480,6 +485,34 @@ void AstraDriver::newDepthFrameCallback(sensor_msgs::ImagePtr image)
   }
 }
 
+void astra_wrapper::AstraDriver::reconnectCallback(const ros::TimerEvent &)
+{
+    try
+    {
+
+        const std::string device_URI = resolveDeviceURI(device_id_);
+        boost::shared_ptr<AstraDevice> device = device_manager_->getDevice(device_URI);
+
+        if(streamed_uri_ != device->getUri()){
+            ROS_WARN("device reconnected!");
+            streamed_uri_ = device_URI;
+            device_ = device;
+            while (ros::ok() && !device_->isValid())
+            {
+              ROS_DEBUG("Waiting for device initialization..");
+              boost::this_thread::sleep(boost::posix_time::milliseconds(100));
+            }
+            // reinit only connectCb
+            advertiseROSTopics(false);
+        }
+    }
+    catch (const AstraException& exception)
+    {
+        ROS_INFO("Device seems to be disconnected. Reason: %s", exception.what());
+        boost::this_thread::sleep(boost::posix_time::seconds(1));
+    }
+}
+
 // Methods to get calibration parameters for the various cameras
 sensor_msgs::CameraInfoPtr AstraDriver::getDefaultCameraInfo(int width, int height, double f) const
 {
@@ -617,7 +650,6 @@ std::string AstraDriver::resolveDeviceURI(const std::string& device_id) throw(As
   // which is <vendor ID>/<product ID>@<bus number>/<device number>
   boost::shared_ptr<std::vector<std::string> > available_device_URIs =
     device_manager_->getConnectedDeviceURIs();
-
   // look for '#<number>' format
   if (device_id.size() > 1 && device_id[0] == '#')
   {
@@ -693,7 +725,7 @@ std::string AstraDriver::resolveDeviceURI(const std::string& device_id) throw(As
       }
       catch (const AstraException& exception)
       {
-        ROS_WARN("Could not query serial number of device \"%s\":", exception.what());
+        ROS_INFO("Could not query serial number of device \"%s\":", exception.what());
       }
     }
 
@@ -731,6 +763,7 @@ void AstraDriver::initDevice()
     {
       std::string device_URI = resolveDeviceURI(device_id_);
       device_ = device_manager_->getDevice(device_URI);
+      streamed_uri_ = device_URI;
     }
     catch (const AstraException& exception)
     {
