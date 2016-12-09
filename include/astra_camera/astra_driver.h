@@ -72,6 +72,8 @@ private:
   void newColorFrameCallback(sensor_msgs::ImagePtr image);
   void newDepthFrameCallback(sensor_msgs::ImagePtr image);
 
+  void reconnectCallback(const ros::TimerEvent&);
+
   // Methods to get calibration parameters for the various cameras
   sensor_msgs::CameraInfoPtr getDefaultCameraInfo(int width, int height, double f) const;
   sensor_msgs::CameraInfoPtr getColorCameraInfo(int width, int height, ros::Time time) const;
@@ -84,7 +86,7 @@ private:
   std::string resolveDeviceURI(const std::string& device_id) throw(AstraException);
   void initDevice();
 
-  void advertiseROSTopics();
+  void advertiseROSTopics(bool infoCamera = true);
 
   void colorConnectCb();
   void depthConnectCb();
@@ -173,6 +175,9 @@ private:
   bool use_device_time_;
 
   Config old_config_;
+
+  std::string streamed_uri_;
+  ros::Timer reconnect_timer_;
 };
 
 }
